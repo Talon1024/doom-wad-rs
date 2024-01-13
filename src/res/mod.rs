@@ -3,6 +3,7 @@ pub mod playpal; pub use playpal::*;
 pub mod flat; pub use flat::*;
 pub mod graphic; pub use graphic::*;
 pub mod textures; pub use textures::*;
+pub mod sound;
 
 /*
 // This shell script generates the grayscale palette seen below
