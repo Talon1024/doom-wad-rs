@@ -310,7 +310,7 @@ mod tests {
     mod the_bronze_room;
     #[test]
     fn bronze_room() -> Result<(), Box<dyn Error>> {
-        let the_wad = futures::executor::block_on(DoomWad::load("tests/data/the bronze room.wad"))?;
+        let the_wad = DoomWad::load("tests/data/the bronze room.wad")?;
         let map_name = LumpName(*b"MAP01\0\0\0");
         let maps = find_maps(&the_wad, None);
         assert_eq!(maps.len(), 1);

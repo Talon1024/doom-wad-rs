@@ -2,7 +2,6 @@
 mod tests {
     use std::{error::Error, fmt::Display};
     use doom_wad::wad::{DoomWad, LumpName};
-    use futures::executor;
 
     #[derive(Debug)]
     struct MapNotFoundError(LumpName);
@@ -18,7 +17,7 @@ mod tests {
     #[test]
     fn can_find_all_maps_vanilla() -> Result<(), Box<dyn Error>> {
         let filename = "tests/data/3difytest.wad";
-        let wad = executor::block_on(DoomWad::load(filename))?;
+        let wad = DoomWad::load(filename)?;
         let actual_maps: Vec<_> = wad.lumps.iter()
             .map(|l| l.name)
             .filter(|&n| doom_wad::map::is_map(n))
@@ -66,7 +65,7 @@ mod tests {
     #[test]
     fn can_find_all_maps_versatile() -> Result<(), Box<dyn Error>> {
         let filename = "tests/data/3difytest.wad";
-        let wad = executor::block_on(DoomWad::load(filename))?;
+        let wad = DoomWad::load(filename)?;
         let actual_maps = doom_wad::map::find_maps(&wad, None);
         let map_names: Vec<_> = actual_maps.iter().map(|map| map.name).collect();
 

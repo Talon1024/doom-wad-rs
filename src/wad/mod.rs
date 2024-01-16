@@ -54,12 +54,12 @@ impl Display for InvalidWadError {
 impl Error for InvalidWadError{}
 
 impl DoomWad {
-    pub async fn load(filename: &(impl AsRef<Path> + ?Sized)) -> Result<DoomWad, Box<dyn Error>> {
+    pub fn load(filename: &(impl AsRef<Path> + ?Sized)) -> Result<DoomWad, Box<dyn Error>> {
         let file = read(filename)?;
-        DoomWad::read_from(&file).await
+        DoomWad::read_from(&file)
     }
 
-    pub async fn read_from(wadata: &[u8]) -> Result<DoomWad, Box<dyn Error>> {
+    pub fn read_from(wadata: &[u8]) -> Result<DoomWad, Box<dyn Error>> {
         let mut wad: DoomWad = DoomWad {
             wtype: DoomWadType::Invalid,
             lumps: Vec::new()
@@ -102,16 +102,15 @@ impl DoomWad {
         Ok(wad)
     }
 
-    pub async fn write(&self, filename: &(impl AsRef<Path> + ?Sized)) -> Result<(), Box<dyn Error>> {
-        // TODO: Make asynchronous
+    pub fn write(&self, filename: &(impl AsRef<Path> + ?Sized)) -> Result<(), Box<dyn Error>> {
         let mut data: Vec<u8> = Vec::<u8>::new();
-        self.write_to(&mut data).await?;
+        self.write_to(&mut data)?;
         let mut file = File::create(filename)?;
         file.write_all(&data[..])?;
         Ok(())
     }
 
-    pub async fn write_to(&self, file: &mut dyn Write) -> Result<(), Box<dyn Error>> {
+    pub fn write_to(&self, file: &mut dyn Write) -> Result<(), Box<dyn Error>> {
         let header_size: u32 = 12;
         let mut num_buffer: [u8; 4] = [0; 4];
         let mut writer = BufWriter::new(file);
