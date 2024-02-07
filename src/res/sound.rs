@@ -1,12 +1,12 @@
 use crate::wad::DoomWadLump;
 use binrw::BinRead;
 use thiserror::Error;
-use std::{sync::Arc, io::Cursor};
+use std::io::Cursor;
 #[cfg(feature = "hound")]
 use hound::{WavSpec, SampleFormat};
 
-pub struct DMXSound {
-    lump: Arc<DoomWadLump>
+pub struct DMXSound<'wad> {
+    lump: &'wad DoomWadLump
 }
 
 #[derive(Debug, Clone, Default)]
@@ -34,8 +34,7 @@ impl Sound {
 struct DMXSoundBinary {
     #[br(assert(
         _format_number == 3,
-        "Wrong format number {} (must be 3)",
-        _format_number
+        "Wrong format number {_format_number} (must be 3)",
     ))]
     _format_number: u16,
     sample_rate: u16,
@@ -58,7 +57,7 @@ impl From<binrw::Error> for SoundError {
     }
 }
 
-impl DMXSound {
+impl<'wad> DMXSound<'wad> {
     pub fn to_sound(&self) -> Result<Sound, SoundError> {
         let sound_data = DMXSoundBinary::read(&mut Cursor::new(&self.lump.data))?;
         Ok(Sound {

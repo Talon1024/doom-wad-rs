@@ -142,8 +142,8 @@ mod tests {
     }
 }
 
-pub fn lump_name(slice: &[u8]) -> Vec<u8> {
-    let mut vec = Vec::from(slice.clone());
+pub fn _lump_name(slice: &[u8]) -> Vec<u8> {
+    let mut vec = Vec::from(slice);
     vec.resize({
         let mut iter = vec.iter();
         let zero_pos = iter.position(|v| v == &0u8);
@@ -152,7 +152,7 @@ pub fn lump_name(slice: &[u8]) -> Vec<u8> {
     vec
 }
 
-pub fn str_to_lump_name(name: &str) -> [u8; 8] {
+pub fn _str_to_lump_name(name: &str) -> [u8; 8] {
     let mut lump_name: [u8; 8] = [0; 8];
     let slen = name.len().min(8);
     let (left, _) = lump_name.split_at_mut(slen);

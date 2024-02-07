@@ -272,11 +272,11 @@ pub fn find_maps(wad: &DoomWad, lump: Option<usize>) -> Vec<Map> {
             format = Format::Doom64;
         }
         // See lumps::DOOM_VANILLA
-        let things = Arc::clone(&map_maybe[0]);
-        let linedefs = Arc::clone(&map_maybe[1]);
-        let sidedefs = Arc::clone(&map_maybe[2]);
-        let vertexes = Arc::clone(&map_maybe[3]);
-        let sectors = Arc::clone(&map_maybe[sectors_index]);
+        let things = Arc::new(map_maybe[0].clone());
+        let linedefs = Arc::new(map_maybe[1].clone());
+        let sidedefs = Arc::new(map_maybe[2].clone());
+        let vertexes = Arc::new(map_maybe[3].clone());
+        let sectors = Arc::new(map_maybe[sectors_index].clone());
         Some(Map {
             name,
             format,

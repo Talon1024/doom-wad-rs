@@ -4,7 +4,7 @@ use std::{
     io::*,
     fs::{File, read},
     result::Result,
-    str::from_utf8, sync::Arc,
+    str::from_utf8,
     error::Error,
     fmt::{Display, Formatter}, collections::HashMap, path::Path,
 };
@@ -33,7 +33,7 @@ pub struct DoomWadLump {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DoomWad {
     pub wtype: DoomWadType,
-    pub lumps: Vec<Arc<DoomWadLump>>,
+    pub lumps: Vec<DoomWadLump>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, BinRead)]
 #[br(little)]
@@ -97,7 +97,7 @@ impl DoomWad {
             reader.seek(SeekFrom::Start(dir_entry.pos as u64))?;
             let mut data: Vec<u8> = vec![0; dir_entry.size as usize];
             reader.read_exact(data.as_mut())?;
-            wad.lumps.push(Arc::new(DoomWadLump{name: dir_entry.name, data }));
+            wad.lumps.push(DoomWadLump{name: dir_entry.name, data });
         }
         Ok(wad)
     }
@@ -157,7 +157,7 @@ impl DoomWad {
     }
 }
 
-pub type Namespaces = HashMap<String, Namespace, RandomState>;
+pub type Namespaces<'wad> = HashMap<String, Namespace<'wad>, RandomState>;
 pub trait Namespaced {
     fn namespace(&self, namespace: &str) -> Option<Namespace>;
 }
@@ -166,75 +166,75 @@ pub trait Namespaced {
 pub struct DoomWadCollection(pub Vec<DoomWad>);
 
 pub trait GetLump {
-    fn get_lump(&self, lump_name: LumpName) -> Option<Arc<DoomWadLump>>;
+    fn get_lump(&self, lump_name: LumpName) -> Option<&DoomWadLump>;
 }
 
-pub type LumpMap = HashMap<LumpName, Arc<DoomWadLump>, RandomState>;
+pub type LumpMap<'wad> = HashMap<LumpName, &'wad DoomWadLump, RandomState>;
 
 impl GetLump for DoomWadCollection {
-    fn get_lump(&self, lump_name: LumpName) -> Option<Arc<DoomWadLump>> {
-        self.0.iter().filter_map(|wad| {
+    fn get_lump(&self, lump_name: LumpName) -> Option<&DoomWadLump> {
+        self.0.iter().find_map(|wad| {
             wad.lumps.iter().rfind(|lu| {
                 lu.name == lump_name
             })
-        }).next().map(Arc::clone)
+        })
     }
 }
 
 impl GetLump for DoomWad {
-    fn get_lump(&self, lump_name: LumpName) -> Option<Arc<DoomWadLump>> {
+    fn get_lump(&self, lump_name: LumpName) -> Option<&DoomWadLump> {
         self.lumps.iter().rfind(|lu| {
             lu.name == lump_name
-        }).map(Arc::clone)
+        })
     }
 }
 
-impl GetLump for LumpMap {
-    fn get_lump(&self, lump_name: LumpName) -> Option<Arc<DoomWadLump>> {
-        self.get(&lump_name).map(Arc::clone)
+impl<'wad> GetLump for LumpMap<'wad> {
+    fn get_lump(&self, lump_name: LumpName) -> Option<&'wad DoomWadLump> {
+        self.get(&lump_name).copied()
     }
 }
 
 impl DoomWadCollection {
-    pub fn lump_map(&self) -> LumpMap {
+    pub fn lump_map<'wad>(&'wad self) -> LumpMap<'wad> {
         let mut lump_map = LumpMap::default();
         self.0.iter().for_each(|wad| {
             wad.lumps.iter().for_each(|lump| {
-                lump_map.insert(lump.name, Arc::clone(lump));
+                lump_map.insert(lump.name, lump);
             });
         });
         lump_map
     }
-    pub fn get(
-        &self,
+    pub fn get<'wad>(
+        &'wad self,
         lump_name: LumpName,
-        map: Option<&dyn GetLump>
-    ) -> Option<Arc<DoomWadLump>> {
+        map: Option<&'wad dyn GetLump>
+    ) -> Option<&'wad DoomWadLump> {
         if let Some(map) = map {
             map.get_lump(lump_name)
         } else {
             self.get_lump(lump_name)
         }
     }
-    pub fn playpal(
-        &self, map: Option<&dyn GetLump>
-    ) -> Option<Arc<DoomWadLump>> {
+    pub fn playpal<'wad>(
+        &'wad self, map: Option<&'wad dyn GetLump>
+    ) -> Option<&'wad DoomWadLump> {
         let playpal = LumpName(*b"PLAYPAL\0");
         self.get(playpal, map)
     }
-    pub fn textures(
-        &self, map: Option<&dyn GetLump>,
-        patches: &Namespace
-    ) -> Option<TextureDefinitionsLumps> {
+    pub fn textures<'wad>(
+        &'wad self, map: Option<&'wad dyn GetLump>,
+        patches: &'wad Namespace
+    ) -> Option<TextureDefinitionsLumps<'wad>> {
         let pnames = LumpName(*b"PNAMES\0\0");
         let tex_lumps = [LumpName(*b"TEXTURE1"), LumpName(*b"TEXTURE2"),
             LumpName(*b"TEXTURE3")];
-        let lump_map = match map {
+        /* let lump_map = match map {
             Some(_) => Default::default(), // This is only for appeasing the
             // borrow checker, and it's not used otherwise.
             None => self.lump_map(), // Fill out the lump map if map is None
-        };
-        let map = map.unwrap_or(&lump_map);
+        }; */
+        let map = map.unwrap_or(self);
         let pnames = self.get(pnames, Some(map))?;
         Some(TextureDefinitionsLumps(tex_lumps.iter().filter_map(|&name| {
             let lump = self.get(name, Some(map))?;
@@ -298,35 +298,35 @@ impl Namespaced for DoomWad {
 }
 
 #[derive(Debug, Clone, Deref, DerefMut, PartialEq, Eq)]
-pub struct Namespace(pub Vec<Arc<DoomWadLump>>);
-impl Namespace {
+pub struct Namespace<'wad>(pub Vec<&'wad DoomWadLump>);
+impl<'wad> Namespace<'wad> {
     pub fn lump_map(&self) -> LumpMap {
         let mut lump_map = LumpMap::default();
         self.0.iter().for_each(|lump| {
-            lump_map.insert(lump.name, Arc::clone(lump));
+            lump_map.insert(lump.name, lump);
         });
         lump_map
     }
     pub fn get(
-        &self,
+        &'wad self,
         lump_name: LumpName,
-        map: Option<&dyn GetLump>
-    ) -> Option<Arc<DoomWadLump>> {
+        map: Option<&'wad dyn GetLump>
+    ) -> Option<&'wad DoomWadLump> {
         if let Some(map) = map {
             map.get_lump(lump_name)
         } else {
             self.get_lump(lump_name)
         }
     }
-    pub fn iter(&self) -> std::slice::Iter<Arc<DoomWadLump>> {
+    pub fn iter(&self) -> std::slice::Iter<&DoomWadLump> {
         self.0.iter()
     }
 }
-impl GetLump for Namespace {
-    fn get_lump(&self, lump_name: LumpName) -> Option<Arc<DoomWadLump>> {
+impl<'wad> GetLump for Namespace<'wad> {
+    fn get_lump(&self, lump_name: LumpName) -> Option<&DoomWadLump> {
         self.0.iter().find(|lu| {
             lu.name == lump_name
-        }).map(Arc::clone)
+        }).copied()
     }
 }
 
@@ -367,11 +367,11 @@ impl<'a> DoomWad {
                 if sub.clone().any(|&ln| ln == lu.name) {
                     None
                 } else {
-                    Some(Arc::clone(lu))
+                    Some(lu)
                 }
             }).collect()
         } else {
-            ns_slice.iter().map(Arc::clone).collect()
+            ns_slice.iter().collect()
         })
     }
     pub fn ns_patches(&self) -> Namespace {
@@ -404,10 +404,10 @@ mod tests {
 
     macro_rules! empty_lump {
         ($name:expr) => {
-            Arc::new(DoomWadLump {
+            DoomWadLump {
                 name: LumpName::try_from($name).unwrap(),
                 data: vec![]
-            })
+            }
         };
     }
 
@@ -427,7 +427,7 @@ mod tests {
             ],
         };
         let expected = Namespace((1..7).map(|index| {
-            Arc::clone(&wad.lumps[index])
+            &wad.lumps[index]
         }).collect());
         let actual = wad.ns_patches();
         assert_eq!(expected.len(), actual.len());
@@ -458,7 +458,7 @@ mod tests {
         };
         let expected_slice = Namespace(
         (2..4).chain(6..8).chain(10..12).map(
-            |index| Arc::clone(&wad.lumps[index])).collect());
+            |index| &wad.lumps[index]).collect());
         let actual_slice = wad.ns_patches();
         assert_eq!(expected_slice, actual_slice);
         Ok(())
