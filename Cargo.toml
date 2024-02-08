@@ -12,7 +12,7 @@ png = {version = "0.17.10", optional = true}
 derive_deref = "1.1.1"
 image = "0.24.2"
 bitflags = "2.3.3"
-binrw = "0.13.3"
+binrw = "0.13"
 hound = {version = "3.5.1", optional = true}
 
 [features]

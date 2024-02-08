@@ -10,7 +10,7 @@ use std::{
 };
 use ahash::RandomState;
 use derive_deref::*;
-use super::DoomPicture;
+use super::GenericPicture;
 use bitflags::bitflags;
 
 bitflags!{
@@ -19,12 +19,12 @@ bitflags!{
 }
 
 #[derive(Debug, Clone)]
-pub struct TexturePatch<'wad> {
+pub struct TexturePatch {
     patch: LumpName,
     x: i16, // X and Y offsets
     y: i16,
     flags: PatchFlags,
-    lump: Option<DoomPicture<'wad>>,
+    lump: Option<GenericPicture>,
 }
 
 bitflags!{
@@ -37,14 +37,14 @@ bitflags!{
 }
 
 #[derive(Debug, Clone)]
-pub struct Texture<'wad> {
+pub struct Texture {
     name: LumpName,
     flags: TextureFlags,
     scalex: TextureScale,
     scaley: TextureScale,
     width: u16,
     height: u16,
-    patches: Vec<TexturePatch<'wad>>,
+    patches: Vec<TexturePatch>,
 }
 
 /// Texture scale for a TEXTUREx texture (ZDoom and derivatives only)
@@ -79,11 +79,11 @@ impl Deref for TextureScale {
 }
 
 #[derive(Debug, Clone)]
-pub struct TextureDefinitions<'wad> {
-    textures: Vec<Texture<'wad>>,
+pub struct TextureDefinitions {
+    textures: Vec<Texture>,
 }
 
-impl<'wad> TextureDefinitions<'wad> {
+impl TextureDefinitions {
     pub fn tex_map(&self) -> TextureDefinitionsMap {
         let mut map = TextureDefinitionsMap::default();
         self.textures.iter().for_each(|t| {
@@ -94,9 +94,9 @@ impl<'wad> TextureDefinitions<'wad> {
 }
 
 #[derive(Default, Deref, Debug)]
-pub struct TextureDefinitionsLumps<'wad>(pub(crate) Vec<TextureDefinitions<'wad>>);
+pub struct TextureDefinitionsLumps(pub(crate) Vec<TextureDefinitions>);
 
-impl<'wad> TextureDefinitionsLumps<'wad> {
+impl TextureDefinitionsLumps {
     pub fn tex_map(&self) -> TextureDefinitionsMap {
         self.0.iter().map(TextureDefinitions::tex_map).reduce(|mut a, b| {
             a.extend(b); a
@@ -108,7 +108,7 @@ impl<'wad> TextureDefinitionsLumps<'wad> {
 // My solution is to add a method to the referred type which creates a HashMap
 // of references to the data in the referree.
 pub type TextureDefinitionsMap<'wad> =
-    HashMap<LumpName, &'wad Texture<'wad>, RandomState>;
+    HashMap<LumpName, &'wad Texture, RandomState>;
 
 // The reference is not held for long, since this function is private, and
 // returns an owned value
@@ -130,7 +130,7 @@ fn read_pnames(pnames: &wad::DoomWadLump) ->
 
 pub fn read_texturex<'wad>(
     list: &'wad DoomWadLump, pnames: &'wad DoomWadLump, wad: &'wad dyn GetLump) ->
-    Result<TextureDefinitions<'wad>, Box<dyn Error>>
+    Result<TextureDefinitions, Box<dyn Error>>
 {
     let patches = read_pnames(pnames)?;
     let mut pos = Cursor::new(&list.data);
@@ -192,9 +192,10 @@ pub fn read_texturex<'wad>(
                 Ok(TexturePatch {
                     patch: patch_name,
                     x,
-                    y, 
+                    y,
                     flags,
-                    lump: wad.get_lump(patch_name).map(DoomPicture::from)
+                    lump: wad.get_lump(patch_name).cloned()
+                        .and_then(|lump| GenericPicture::try_from_picture(lump).ok())
                 })
             }).collect::<Result<Vec<TexturePatch>, Box<dyn Error>>>()?
         });
@@ -203,20 +204,17 @@ pub fn read_texturex<'wad>(
     Ok(defs)
 }
 
-impl<'wad> ToImage for Texture<'wad> {
+impl<'wad> ToImage for Texture {
     fn to_image(&self) -> Image {
         let mut image = Image::new(self.width as usize, self.height as usize, ImageFormat::IndexedAlpha);
         self.patches.iter().for_each(|pa| {
-            match &pa.lump {
-                Some(lump) => {
-                    let patch_image = lump.to_image();
-                    let blit_res = image.blit(&patch_image, pa.x as i32, pa.y as i32);
-                    if let Err(e) = blit_res {
-                        eprintln!("{}", e);
-                    }
-                },
-                None => (),
-            };
+            let patch_image = pa.lump.as_ref().map(ToImage::to_image);
+            if let Some(patch_image) = patch_image {
+                let blit_res = image.blit(&patch_image, patch_image.x as i32, patch_image.y as i32);
+                if let Err(e) = blit_res {
+                    eprintln!("{}", e);
+                }
+            }
         });
         image
     }

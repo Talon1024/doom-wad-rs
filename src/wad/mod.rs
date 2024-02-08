@@ -5,6 +5,7 @@ use std::{
     fs::{File, read},
     result::Result,
     str::from_utf8,
+    sync::Arc,
     error::Error,
     fmt::{Display, Formatter}, collections::HashMap, path::Path,
 };
@@ -225,15 +226,10 @@ impl DoomWadCollection {
     pub fn textures<'wad>(
         &'wad self, map: Option<&'wad dyn GetLump>,
         patches: &'wad Namespace
-    ) -> Option<TextureDefinitionsLumps<'wad>> {
+    ) -> Option<TextureDefinitionsLumps> {
         let pnames = LumpName(*b"PNAMES\0\0");
         let tex_lumps = [LumpName(*b"TEXTURE1"), LumpName(*b"TEXTURE2"),
             LumpName(*b"TEXTURE3")];
-        /* let lump_map = match map {
-            Some(_) => Default::default(), // This is only for appeasing the
-            // borrow checker, and it's not used otherwise.
-            None => self.lump_map(), // Fill out the lump map if map is None
-        }; */
         let map = map.unwrap_or(self);
         let pnames = self.get(pnames, Some(map))?;
         Some(TextureDefinitionsLumps(tex_lumps.iter().filter_map(|&name| {

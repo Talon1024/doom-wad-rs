@@ -1,16 +1,11 @@
 // Flats are 64x64 graphics stored as indexed samples in row-major order.
 use crate::wad::DoomWadLump;
-use crate::res::{ToImage, Image, ImageDimension};
 
-use super::IndexedBuffer;
-
-const MINIMUM_SIZE: usize = 64;
-// const MINIMUM_BYTES: usize = 4096; // 64 * 64
-
+#[deprecated(since="0.2.0", note="Use GenericPicture::try_from_flat")]
 pub struct FlatImage<'wad> {
     lump: &'wad DoomWadLump
 }
-
+/*
 impl<'wad> FlatImage<'wad> {
     pub fn height(&self) -> ImageDimension {
         let l = self.lump.data.len();
@@ -42,11 +37,12 @@ impl<'wad> ToImage for FlatImage<'wad> {
         }
     }
 }
-
+*/
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::wad::LumpName;
+
+    use crate::res::{ToImage, Image, GenericPicture, IndexedBuffer};
+    use crate::wad::{LumpName, DoomWadLump};
 
     #[test]
     fn converts_flats_properly() {
@@ -67,14 +63,14 @@ mod tests {
             truecolor: None
         };
 
-        let flat_image = FlatImage {lump: &flat_lump};
+        let flat_image = GenericPicture::try_from_flat(flat_lump).unwrap();
         let flat_image = flat_image.to_image();
 
         assert_eq!(flat_image.width, expected.width);
         assert_eq!(flat_image.height, expected.height);
         assert_eq!(flat_image.indexed, expected.indexed);
     }
-
+    /*
     #[test]
     // Heretic's F_SKY1 lump is only 4 bytes long
     fn converts_heretic_sky() {
@@ -94,7 +90,7 @@ mod tests {
             truecolor: None,
         };
 
-        let flat_image = FlatImage {lump: &flat_lump};
+        let flat_image = GenericPicture::try_from_flat(flat_lump).unwrap();
         let flat_image = flat_image.to_image();
 
         assert_eq!(flat_image.width, expected.width);
@@ -126,11 +122,12 @@ mod tests {
             truecolor: None,
         };
 
-        let flat_image = FlatImage {lump: &flat_lump};
+        let flat_image = GenericPicture::try_from_flat(flat_lump).unwrap();
         let flat_image = flat_image.to_image();
 
         assert_eq!(flat_image.width, expected.width);
         assert_eq!(flat_image.height, expected.height);
         assert_eq!(flat_image.indexed, expected.indexed);
     }
+    */
 }

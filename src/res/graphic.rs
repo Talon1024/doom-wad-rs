@@ -1,117 +1,154 @@
 use crate::wad::DoomWadLump;
-use crate::res::{self, ToImage, Image, ImageFormat, ImageDimension, IndexedBuffer};
+use crate::res::{self, ToImage, Image, ImageDimension, IndexedBuffer};
 use std::{
-    error::Error,
-    io::{Read, Cursor, Seek, SeekFrom},
+    io::{Read, Cursor, Seek, SeekFrom, Error as IOError},
+    array,
 };
-use binrw::BinRead;
+use binrw::{BinRead, Error as BinReadError};
+use thiserror::Error;
 
+/// Offsets for a Doom picture.
+///
+/// A "picture" can be literally anything that isn't a flat. For example,
+/// sprites and wall textures. Offsets are only relevant for sprites.
+///
+/// Without offsets, a picture is drawn at the actor's position, starting from
+/// the top left corner. This means a sprite will appear submerged into the
+/// ground, unless offsets are given so that the sprite is drawn above ground.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PictureOffsets {
+    /// X (horizontal) offset.
+    ///
+    /// Positive values move the picture left, negative values move the picture
+    /// right.
+    pub x: i32,
+    /// Y (vertical) offset.
+    ///
+    /// Positive values move the picture up, negative values move the picture
+    /// down.
+    pub y: i32,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GenericPicture {
+    pub pixels: Vec<Option<u8>>,
+    pub width: ImageDimension,
+    pub height: ImageDimension,
+    pub offsets: PictureOffsets,
+    pub opaque: bool
+}
+
+impl GenericPicture {
+    pub const OPAQUE_ALPHA: u8 = 255;
+}
+
+#[deprecated(since="0.2.0", note="Use GenericPicture (owned) instead")]
 #[derive(Debug, Clone)]
 pub struct DoomPicture<'wad> {
     lump: &'wad DoomWadLump
 }
 
-impl<'wad> From<&'wad DoomWadLump> for DoomPicture<'wad> {
-    fn from(lump: &'wad DoomWadLump) -> DoomPicture {
-        DoomPicture { lump }
+#[derive(Debug, Error)]
+pub enum PictureConvertError {
+    #[error("Error reading header: {0}")]
+    HeaderReadError(BinReadError),
+    #[error("Not enough offsets for all columns")]
+    ColumnOffsets,
+    #[error("Error reading a post of column {0}: {1}")]
+    PostIO(usize, IOError),
+    #[error("Error reading a post of column {0}: {1}")]
+    PostBR(usize, BinReadError),
+}
+
+impl PictureConvertError {
+    fn header_read_error(binread_error: BinReadError) -> PictureConvertError {
+        PictureConvertError::HeaderReadError(binread_error)
     }
 }
 
-#[derive(BinRead)]
-#[br(little)]
-struct PictureHeader
-{
-    width: u16,
-    height: u16,
-    x: i16,
-    y: i16,
+#[derive(Debug, Error)]
+pub enum FlatConvertError {
+    #[error("Too short! Minimum is 4096 bytes, lump has {0} bytes")]
+    TooShort(usize),
 }
 
-impl<'wad> ToImage for DoomPicture<'wad> {
-    fn to_image(&self) -> Image {
-
-        // TODO: Format detection and processing
+impl GenericPicture {
+    pub fn try_from_picture(lump: DoomWadLump) -> Result<Self, PictureConvertError> {
         struct DoomPicturePost {
             column: ImageDimension,
             top_delta: u8,
             pixels: Vec<u8>
         }
 
-        // let mut short_buffer: [u8; 2] = [0; 2];
+        #[derive(BinRead)]
+        #[br(little)]
+        struct DoomPicturePostPixels {
+            // Post height
+            height: u8,
+            // Padding byte to prevent underflow
+            _pre_padding: u8,
+            #[br(count = height)]
+            pixels: Vec<u8>,
+            // Padding byte to prevent overflow
+            _post_padding: u8,
+        }
+
+        #[derive(BinRead)]
+        #[br(little)]
+        struct PictureHeader {
+            width: u16,
+            height: u16,
+            x_offset: i16,
+            y_offset: i16,
+        }
+
         let mut long_buffer: [u8; 4] = [0; 4];
-        let mut pos = Cursor::new(&self.lump.data);
+        let mut pos = Cursor::new(&lump.data);
 
-        // In case the patch is bad
-        let bad_image = Image::default();
-
-        let PictureHeader {width, height, x, y} = {
-            let res = PictureHeader::read(&mut pos);
-            if res.is_err() { return bad_image; }
-            res.unwrap()
-        };
+        let PictureHeader {width, height, x_offset, y_offset} =
+            PictureHeader::read(&mut pos)
+                .map_err(PictureConvertError::header_read_error)?;
         let width = width as ImageDimension;
         let height = height as ImageDimension;
 
         // Column offsets are relative to the start of the lump
-        let column_offsets: Result<Vec<usize>, Box<dyn Error>> = (0..width).map(|_| {
-            pos.read_exact(&mut long_buffer)?;
-            Ok(u32::from_le_bytes(long_buffer) as usize)
+        let column_offsets: Result<Vec<_>, PictureConvertError> = (0..width).map(|_| {
+            pos.read_exact(&mut long_buffer)
+                .map_err(|_| PictureConvertError::ColumnOffsets)?;
+            Ok(u32::from_le_bytes(long_buffer) as u64)
         }).collect();
-        if column_offsets.is_err() {
-            return bad_image;
-        }
-        let column_offsets = column_offsets.unwrap();
+
+        let column_offsets = column_offsets?;
 
         let image_pixels = (width * height) as usize;
-        let mut data = vec![0u8; image_pixels];
-        let mut alpha = vec![0u8; image_pixels];
+        let mut pixels = vec![None; image_pixels];
         let mut opaque_pixels: usize = 0;
 
-        column_offsets.iter()
-        .enumerate().map(|(column, &offset)| {
-            if pos.seek(SeekFrom::Start(offset as u64)).is_err() {
-                return Vec::new();
-            }
-            let mut cur_byte: [u8; 1] = [0];
+        column_offsets.iter().enumerate().map(
+        |(column, &offset)| -> Result<Vec<DoomPicturePost>, PictureConvertError> {
+            pos.seek(SeekFrom::Start(offset))
+                .map_err(|e| PictureConvertError::PostIO(column, e))?;
+            let mut cur_byte = 0;
             let mut posts: Vec<DoomPicturePost> = Vec::new();
             loop {
+                // Downward offset from top of patch or bottom of previous post
+                pos.read_exact(array::from_mut(&mut cur_byte))
+                    .map_err(|e| PictureConvertError::PostIO(column, e))?;
+                let top_delta = cur_byte;
+                // A "top delta" of 255 marks the end of the column
+                if top_delta == 255 { break }
 
-                if pos.read_exact(&mut cur_byte).is_err() {
-                    return posts;
-                }
-                let top_delta = cur_byte[0];
-
-                if top_delta == 255 {
-                    break
-                }
-
-                if pos.read_exact(&mut cur_byte).is_err() {
-                    return posts;
-                }
-                let length = cur_byte[0];
-
-                if pos.seek(SeekFrom::Current(1)).is_err() {
-                    // Unused padding byte
-                    return posts;
-                }
-
-                let mut pixels = vec![0u8; length as usize];
-                if pos.read_exact(&mut pixels).is_err() {
-                    return posts;
-                }
-
-                if pos.seek(SeekFrom::Current(1)).is_err() {
-                    // Unused padding byte
-                    return posts;
-                }
+                let DoomPicturePostPixels { pixels, .. } =
+                    DoomPicturePostPixels::read(&mut pos)
+                    .map_err(|e| PictureConvertError::PostBR(column, e))?;
                 posts.push(DoomPicturePost {
                     column: column as ImageDimension, top_delta, pixels
                 });
             }
-            posts
-        }).for_each(|col_posts| {
+            Ok(posts)
+        }).try_for_each(|col_posts| {
             let mut coly = 0 as ImageDimension;
-            col_posts.iter().for_each(|post| {
+            col_posts?.iter().for_each(|post| {
                 let top_delta = post.top_delta as ImageDimension;
                 let y = if top_delta <= coly {
                     coly + top_delta
@@ -125,44 +162,61 @@ impl<'wad> ToImage for DoomPicture<'wad> {
                     if let Some(bp) = res::xy_to_bufpos(
                             post.column, y + pixpos, width, height, 1) {
                         // pixel_count[pixel as usize] += 1;
-                        data[bp] = pixel; // Index
-                        alpha[bp] = 255; // Alpha
+                        pixels[bp] = Some(pixel); // Index
                         opaque_pixels += 1;
                     }
                 });
             });
-        });
-        let format = {
-            if opaque_pixels == image_pixels {
-                ImageFormat::Indexed  // Fully opaque
-            } else {
-                ImageFormat::IndexedAlpha
+            Ok(())
+        })?;
+        let opaque = opaque_pixels == image_pixels;
+        Ok(GenericPicture {
+            pixels,
+            width,
+            height,
+            opaque,
+            offsets: PictureOffsets { x: x_offset as i32, y: y_offset as i32 }
+        })
+    }
+    pub fn try_from_flat(lump: DoomWadLump) -> Result<Self, FlatConvertError> {
+        let opaque = true;
+        let width = 64;
+        let height = {
+            let lump_len = lump.data.len();
+            if lump_len < 4096 {
+                return Err(FlatConvertError::TooShort(lump_len));
             }
+            64 + (lump_len - 4096).wrapping_shr(6)
         };
-        // Partially or fully transparent
-        if format == ImageFormat::IndexedAlpha {
-            // 2 channels - index and alpha
-            let channels = format.channels() as usize;
-            let mut pixels = vec![0u8; image_pixels * channels];
-            pixels.chunks_exact_mut(channels).zip(data).zip(alpha)
-            .for_each(|((chunk, index), alpha)| {
-                chunk[0] = index; chunk[1] = alpha;
-            });
-            Image {
-                width, height, indexed: Some(IndexedBuffer {
-                    buffer: pixels.into_boxed_slice(),
-                    alpha: true,
-                }), truecolor: None,
-                x: x as i32, y: y as i32
-            }
-        } else {  // Fully opaque
-            Image {
-                width, height, indexed: Some(IndexedBuffer {
-                    buffer: data.into_boxed_slice(),
-                    alpha: false,
-                }), truecolor: None,
-                x: x as i32, y: y as i32
-            }
+        let offsets = PictureOffsets::default();
+        let pixels = lump.data.iter().map(|&b| Some(b)).collect();
+        Ok(Self { pixels, width, height, offsets, opaque })
+    }
+}
+
+impl ToImage for GenericPicture {
+    fn to_image(&self) -> Image {
+        Image {
+            width: self.width,
+            height: self.height,
+            indexed: Some(IndexedBuffer {
+                buffer: {
+                    if self.opaque {
+                        self.pixels.iter().map(|px| px.unwrap()).collect()
+                    } else {
+                        self.pixels.iter().map(|px| {
+                            match px.as_ref().copied() {
+                                Some(i) => [i, Self::OPAQUE_ALPHA],
+                                None => [0, 0],
+                            }
+                        }).flatten().collect()
+                    }
+                },
+                alpha: !self.opaque
+            }),
+            truecolor: None,
+            x: self.offsets.x,
+            y: self.offsets.y,
         }
     }
 }
@@ -192,7 +246,8 @@ mod tests {
             truecolor: None,
         };
 
-        let picture = DoomPicture {lump: &patch_lump};
+        let picture = GenericPicture::try_from_picture(patch_lump).unwrap();
+        assert_eq!(picture.opaque, true);
         let image = picture.to_image();
 
         assert_eq!(image.width, expected.width);
@@ -222,7 +277,8 @@ mod tests {
             truecolor: None,
         };
 
-        let picture = DoomPicture {lump: &patch_lump};
+        let picture = GenericPicture::try_from_picture(patch_lump).unwrap();
+        assert_eq!(picture.opaque, false);
         let image = picture.to_image();
 
         assert_eq!(image.width, expected.width);
@@ -252,7 +308,7 @@ mod tests {
             truecolor: None,
         };
 
-        let picture = DoomPicture {lump: &patch_lump};
+        let picture = GenericPicture::try_from_picture(patch_lump).unwrap();
         let image = picture.to_image();
 
         assert_eq!(image.width, expected.width);
@@ -282,7 +338,7 @@ mod tests {
             truecolor: None,
         };
 
-        let picture = DoomPicture {lump: &patch_lump};
+        let picture = GenericPicture::try_from_picture(patch_lump).unwrap();
         let image = picture.to_image();
 
         assert_eq!(image.width, expected.width);
@@ -312,7 +368,7 @@ mod tests {
             truecolor: None
         };
 
-        let picture = DoomPicture {lump: &patch_lump};
+        let picture = GenericPicture::try_from_picture(patch_lump).unwrap();
         let image = picture.to_image();
 
         assert_eq!(image.width, expected.width);

@@ -55,6 +55,8 @@ pub type ImageDimension = usize;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IndexedBuffer {
     pub buffer: Box<[u8]>,
+    /// If `alpha` is true, buffer will have two channels per pixel:
+    /// The palette index, and the alpha value.
     pub alpha: bool
 }
 
